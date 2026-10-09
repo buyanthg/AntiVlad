@@ -1,0 +1,35 @@
+# Python
+
+**pycache**/
+*.py[cod]
+*.pyd
+
+# Virtual environments
+
+.venv/
+venv/
+env/
+
+# IDE
+
+.idea/
+.vscode/
+
+# Model checkpoints and weights
+
+checkpoints/
+*.pt
+*.pth
+*.ckpt
+
+# Logs and experiment outputs
+
+logs/
+runs/
+*.log
+tensorboard/
+
+# OS
+
+.DS_Store
+Thumbs.db
