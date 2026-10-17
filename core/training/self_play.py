@@ -1,25 +1,31 @@
+import time
+
 import chess
 import numpy as np
 import torch
 
-from mcts import MCTS, update_history
-from encode_state import encode_state
+from core.search.mcts import MCTS, update_history
+from core.chess.encode_state import encode_state
+from core.chess.action_encoder import encode_action
 
-from constants import ACTION_SIZE, HISTORY_LENGTH, TEMPERATURE_MOVES
+from core.constants import ACTION_SIZE, HISTORY_LENGTH, TEMPERATURE_MOVES
 
+MAX_PLIES = 250
 
 def create_history(board):
-    return [board.copy(stack=False) for _ in range(HISTORY_LENGTH)]
+    return [
+        board.copy(stack=False)
+        for _ in range(HISTORY_LENGTH)
+    ]
+
 
 def get_result(board):
-    result = board.result()
+    result = board.result(claim_draw=True)
 
     if result == "1-0":
         return chess.WHITE
-
     if result == "0-1":
         return chess.BLACK
-
     return None
 
 
@@ -34,9 +40,7 @@ def create_training_data(states, policies, players, result):
         else:
             value = -1.0
 
-        data.append(
-            (state, torch.tensor(policy), torch.tensor(value, dtype=torch.float32))
-        )
+        data.append((state, torch.tensor(policy), torch.tensor(value, dtype=torch.float32)))
 
     return data
 
@@ -44,10 +48,7 @@ def create_training_data(states, policies, players, result):
 def get_policy(root):
     policy = np.zeros(ACTION_SIZE, dtype=np.float32)
 
-    total_visits = sum(
-        child.visit_count
-        for child in root.children.values()
-    )
+    total_visits = sum(child.visit_count for child in root.children.values())
 
     if total_visits == 0:
         return policy
@@ -62,7 +63,7 @@ def select_action(root, move_number):
     temperature = 1.0 if move_number < TEMPERATURE_MOVES else 0.0
     actions = list(root.children.keys())
 
-    visits = np.array([root.children[action].visit_count for action in actions], dtype=np.float64)
+    visits = np.array([root.children[action].visit_count for action in actions], dtype=np.float32)
 
     if temperature == 0.0:
         return actions[np.argmax(visits)]
@@ -74,9 +75,8 @@ def select_action(root, move_number):
 
 
 class SelfPlay:
-    def __init__(self, model, simulations=100, c_puct=1.5):
-        self.model = model
-        self.mcts = MCTS(model, simulations, c_puct)
+    def __init__(self, model, simulations=800, c_puct=1.5):
+        self.mcts = MCTS(model, simulations, c_puct, add_noise=True,)
 
     def play_game(self):
         board = chess.Board()
@@ -86,34 +86,30 @@ class SelfPlay:
         policies = []
         players = []
 
-        move_number = 0
+        plies = 0
 
-        while not board.is_game_over():
-            root = self.mcts.search(history)
+        while not board.is_game_over(claim_draw=True) and plies < MAX_PLIES:
+            root = self.mcts.search_batched(history)
 
             state = encode_state(history)
-
             policy = get_policy(root)
 
             states.append(state)
             policies.append(policy)
             players.append(board.turn)
 
-            action = select_action(root, move_number)
+            action = select_action(root, plies)
             child = root.children[action]
+
             board = child.board
-
             history = update_history(history, board)
+            plies += 1
 
-            move_number += 1
+        # Незавершённая партия отбрасывается целиком.
+        if not board.is_game_over(claim_draw=True):
+            return None
 
         result = get_result(board)
+        training_data = create_training_data(states, policies, players, result)
 
-        return create_training_data(
-            states,
-            policies,
-            players,
-            result
-        )
-
-
+        return training_data

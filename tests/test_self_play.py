@@ -1,12 +1,11 @@
 import chess
 import numpy as np
 import torch
-from torch import nn
 import pytest
 
-from constants import ACTION_SIZE, HISTORY_LENGTH
-from antivlad_net import AntiVladNet
-from self_play import (
+from core.constants import ACTION_SIZE, HISTORY_LENGTH
+from core.network.antivlad_net import AntiVladNet
+from core.training.self_play import (
     SelfPlay,
     create_history,
     create_training_data,

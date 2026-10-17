@@ -1,8 +1,4 @@
-import chess
-import torch
-
-from constants import *
-from encode_state import encode_state
+from core.constants import *
 
 
 def test_shape():
@@ -111,11 +107,11 @@ def test_board_orientation():
 import chess
 import torch
 
-from constants import (
+from core.constants import (
     CASTLING_OFFSET,
     EN_PASSANT_OFFSET,
 )
-from encode_state import encode_state
+from core.chess.encode_state import encode_state
 
 
 def test_castling_rights():

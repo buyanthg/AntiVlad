@@ -1,10 +1,8 @@
-import chess
-import torch
 from torch import nn
 import pytest
-from constants import *
-from mcts import MCTS, Node, backup, terminal_value, update_history
-from antivlad_net import AntiVladNet
+from core.constants import *
+from core.search.mcts import MCTS, Node, backup, terminal_value, update_history
+from core.network.antivlad_net import AntiVladNet
 
 class DummyModel(nn.Module):
     def __init__(self, action_size: int):

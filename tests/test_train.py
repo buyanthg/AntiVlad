@@ -1,9 +1,9 @@
 import torch
 
-from antivlad_net import AntiVladNet
-from constants import TOTAL_PLANES
-from train import Trainer
-from action_encoder import ACTION_SIZE
+from core.network.antivlad_net import AntiVladNet
+from core.constants import TOTAL_PLANES
+from core.training.trainer import Trainer
+from core.chess.action_encoder import ACTION_SIZE
 
 
 def create_model():

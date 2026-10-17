@@ -1,7 +1,7 @@
 from torch import nn
 
-from constants import *
-from action_encoder import ACTION_SIZE
+from core.constants import *
+from core.chess.action_encoder import ACTION_SIZE
 
 
 class AntiVladNet(nn.Module):
@@ -110,3 +110,7 @@ class ValueHead(nn.Module):
         output = self.fc2(output)
         output = self.tanh(output)
         return output
+
+def get_standart_model():
+    return AntiVladNet(NETWORK_CHANNELS, POLICY_CHANNELS, VALUE_CHANNELS,
+                       VALUE_HIDDEN, NUM_RESIDUAL_BLOCKS,)

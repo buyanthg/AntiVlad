@@ -1,7 +1,4 @@
-import chess
-import torch
-
-from constants import *
+from core.constants import *
 
 KNIGHT_DISPLACEMENTS = frozenset({
     (1, 2),

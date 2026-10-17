@@ -2,8 +2,8 @@ import chess
 import numpy as np
 import torch
 
-from action_encoder import encode_action
-from encode_state import encode_state
+from core.chess.action_encoder import encode_action
+from core.chess.encode_state import encode_state
 
 
 def backup(node, value):

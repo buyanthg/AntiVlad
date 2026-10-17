@@ -1,7 +1,7 @@
 import torch
 
-from constants import ACTION_SIZE, BOARD_SIZE, TOTAL_PLANES
-from dataset import ChessDataset
+from core.constants import ACTION_SIZE, BOARD_SIZE, TOTAL_PLANES
+from core.training.dataset import ChessDataset
 
 
 def test_dataset_length():

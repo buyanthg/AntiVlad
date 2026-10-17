@@ -4,7 +4,7 @@ import pytest
 import torch
 from torch import nn
 
-from mcts import MCTS
+from core.search.mcts import MCTS
 
 
 class DummyModel(nn.Module):
@@ -140,7 +140,7 @@ def test_search_batched_does_not_modify_original_board():
 
 
 def test_virtual_loss_apply_and_remove_restore_node_stats():
-    from mcts import Node
+    from core.search.mcts import Node
 
     root = Node(chess.Board())
     child = Node(

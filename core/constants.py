@@ -1,4 +1,5 @@
 import chess
+import torch
 
 # ========================
 # Network architecture
@@ -9,11 +10,12 @@ VALUE_CHANNELS = 32
 VALUE_HIDDEN = 16
 NUM_RESIDUAL_BLOCKS = 10
 
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
 # =========================
 # Train
 # =========================
-CHECKPOINT_DIR = "checkpoints"
-
+CHECKPOINT_DIR = "../checkpoints"
 
 # =========================
 # Board / state
@@ -91,7 +93,26 @@ PROMOTION_MOVES = {
     (1, 1, chess.ROOK): 72,
 }
 
+KNIGHT_TABLE = [[-1] * 5 for _ in range(5)]
+for (dx, dy), value in KNIGHT_MOVES.items():
+    KNIGHT_TABLE[dx + 2][dy + 2] = value
 
+DIRECTION_TABLE = [[-1] * 3 for _ in range(3)]
+for (dx, dy), value in DIRECTION_MAP.items():
+    DIRECTION_TABLE[dx + 1][dy + 1] = value
+
+PROMOTION_INDEX = {
+    chess.KNIGHT: 0,
+    chess.BISHOP: 1,
+    chess.ROOK: 2,
+}
+
+PROMOTION_TABLE = [
+    [[-1] * 3 for _ in range(3)]
+    for _ in range(3)
+]
+for (dx, dy, piece), value in PROMOTION_MOVES.items():
+    PROMOTION_TABLE[dx + 1][dy + 1][PROMOTION_INDEX[piece]] = value
 # =========================
 # Reverse maps
 # =========================

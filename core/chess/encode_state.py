@@ -1,5 +1,5 @@
 import numpy as np
-from constants import *
+from core.constants import *
 
 
 def encode_state(history: list[chess.Board]) -> torch.Tensor:

@@ -1,8 +1,7 @@
-import unittest
 import chess
 import torch
 
-from action_encoder import encode_move, decode_move, action_to_index, index_to_action, legal_action_mask, encode_action, decode_action
+from core.chess.action_encoder import encode_move, decode_move, action_to_index, legal_action_mask, encode_action, decode_action
 
 
 def test_encode_decode():
