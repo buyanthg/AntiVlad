@@ -1,13 +1,9 @@
-
 import chess
 import numpy as np
 import torch
-import time
 
-from action_encoder import encode_action, legal_action_mask, decode_action
+from action_encoder import encode_action
 from encode_state import encode_state
-from constants import *
-from antivlad_net import AntiVladNet, get_standart_model
 
 
 def backup(node, value):
@@ -44,7 +40,14 @@ class Node:
 
         self.visit_count = 0
         self.value_sum = 0.0
+
+        # Материализованные дочерние узлы.
+        # Ключ: индекс действия.
         self.children = {}
+
+        # None: узел ещё не раскрыт.
+        # dict: индекс действия -> (chess.Move, prior).
+        self.legal_actions = None
 
     def value(self):
         if self.visit_count == 0:
@@ -53,12 +56,19 @@ class Node:
         return self.value_sum / self.visit_count
 
     def is_expanded(self):
-        return len(self.children) > 0
+        return bool(self.legal_actions)
 
 
 class MCTS:
-    def __init__(self, model=None, simulations=800, c_puct=1.5,
-                dirichlet_alpha=0.3, dirichlet_eps=0.25, add_noise=False,):
+    def __init__(
+        self,
+        model=None,
+        simulations=800,
+        c_puct=1.5,
+        dirichlet_alpha=0.3,
+        dirichlet_eps=0.25,
+        add_noise=False,
+    ):
         self.model = model
         self.simulations = simulations
         self.c_puct = c_puct
@@ -73,7 +83,7 @@ class MCTS:
             self.device = torch.device("cpu")
 
     # --------------------------------------------------
-    # SEARCH: ORIGINAL SEQUENTIAL VERSION
+    # SEARCH: SEQUENTIAL
     # --------------------------------------------------
 
     def search(self, history):
@@ -107,7 +117,6 @@ class MCTS:
         if batch_size < 1:
             raise ValueError("batch_size должен быть >= 1")
 
-        # Без модели пакетный инференс не имеет смысла.
         if self.model is None:
             return self.search(history)
 
@@ -124,31 +133,22 @@ class MCTS:
         completed = 0
 
         while completed < self.simulations:
-            batch_limit = min(
-                batch_size,
-                self.simulations - completed,
-            )
+            batch_limit = min(batch_size, self.simulations - completed)
 
             pending = []
             pending_nodes = set()
             slots = 0
 
-            # ------------------------------------------
-            # 1. COLLECT LEAF NODES
-            # ------------------------------------------
-
+            # Выбираем листья для текущего пакета.
             while slots < batch_limit:
-                result = self.select_batched(root, history, pending_nodes,)
+                result = self.select_batched(root, history, pending_nodes)
 
-                # Столкнулись с листом, уже зарезервированным
-                # другой траекторией этого пакета.
                 if result is None:
                     break
 
                 node, node_history, path = result
                 slots += 1
 
-                # Терминальные узлы не требуют инференса.
                 if node.board.is_game_over(claim_draw=True):
                     backup(node, terminal_value(node.board))
                     completed += 1
@@ -156,58 +156,35 @@ class MCTS:
 
                 self.apply_virtual_loss(path)
 
-                pending.append(
-                    (node, node_history, path)
-                )
+                pending.append((node, node_history, path))
                 pending_nodes.add(node)
 
-            # Все слоты могли оказаться терминальными.
             if not pending:
                 if completed >= self.simulations:
                     break
 
                 if slots == 0:
-                    raise RuntimeError(
-                        "Не удалось выбрать лист для MCTS. "
-                        "Проверь структуру дерева."
-                    )
+                    raise RuntimeError("Не удалось выбрать лист для MCTS. Проверь структуру дерева.")
 
                 continue
 
-            # ------------------------------------------
-            # 2. ENCODE ALL STATES
-            # ------------------------------------------
+            # Кодируем состояния одним пакетом.
+            states = torch.stack([encode_state(node_history) for _, node_history, _ in pending]).to(self.device)
 
-            states = torch.stack([
-                encode_state(node_history)
-                for _, node_history, _ in pending
-            ]).to(self.device)
-
-            # ------------------------------------------
-            # 3. SINGLE MODEL CALL FOR THE BATCH
-            # ------------------------------------------
-
+            # Один вызов сети на весь пакет.
             with torch.inference_mode():
                 batch_policy, batch_values = self.model(states)
 
-            # ------------------------------------------
-            # 4. EXPAND AND BACK UP
-            # ------------------------------------------
+            batch_policy = batch_policy.cpu()
+            batch_values = batch_values.cpu()
 
+            # Раскрываем листья и обновляем значения дерева.
             for i, (node, node_history, path) in enumerate(pending):
-                # Убираем временные посещения и значения.
                 self.remove_virtual_loss(path)
 
-                prediction = (
-                    batch_policy[i],
-                    batch_values[i],
-                )
+                prediction = (batch_policy[i], batch_values[i])
 
-                value = self.expand(
-                    node,
-                    node_history,
-                    prediction=prediction,
-                )
+                value = self.expand(node, node_history, prediction=prediction,)
 
                 backup(node, value)
                 completed += 1
@@ -218,63 +195,87 @@ class MCTS:
     # SELECTION
     # --------------------------------------------------
 
+    def create_child(self, node, action_index):
+        """Создать дочерний узел при первом выборе хода."""
+        child = node.children.get(action_index)
+
+        if child is not None:
+            return child
+
+        if not node.legal_actions or action_index not in node.legal_actions:
+            raise KeyError(f"Действие {action_index} отсутствует среди легальных ходов узла.")
+
+        move, prior = node.legal_actions[action_index]
+
+        child_board = node.board.copy(stack=False)
+        child_board.push(move)
+
+        child = Node(board=child_board, parent=node, prior=prior, action=action_index)
+
+        node.children[action_index] = child
+        return child
+
+    def select_child(self, node):
+        """Выбрать ход по PUCT среди всех легальных действий."""
+        legal_actions = node.legal_actions
+
+        if not legal_actions:
+            raise RuntimeError("Попытка выбрать ход из пустого узла.")
+
+        sqrt_parent_visits = np.sqrt(node.visit_count)
+
+        best_action = None
+        best_score = -float("inf")
+
+        for action_index, (_, prior) in legal_actions.items():
+            child = node.children.get(action_index)
+
+            if child is None:
+                q = 0.0
+                visits = 0
+                effective_prior = prior
+            else:
+                visits = child.visit_count
+                q = -child.value() if visits else 0.0
+                effective_prior = child.prior
+
+            score = q + self.c_puct * effective_prior * sqrt_parent_visits / (1 + visits)
+
+            if score > best_score:
+                best_score = score
+                best_action = action_index
+
+        return self.create_child(node, best_action)
+
     def select(self, node, history):
         current_history = history
 
-        while (
-            node.is_expanded()
-            and not node.board.is_game_over(claim_draw=True)
-        ):
-            node = max(
-                node.children.values(),
-                key=lambda child: self.ucb_score(node, child),
-            )
-
-            current_history = update_history(
-                current_history,
-                node.board,
-            )
+        while node.is_expanded() and not node.board.is_game_over(claim_draw=True):
+            node = self.select_child(node)
+            current_history = update_history(current_history, node.board)
 
         return node, current_history
 
     def select_batched(self, node, history, pending_nodes):
-        current_history = history
         path = [node]
 
-        while (
-            node.is_expanded()
-            and not node.board.is_game_over(claim_draw=True)
-        ):
-            node = max(
-                node.children.values(),
-                key=lambda child: self.ucb_score(node, child),
-            )
-
+        while node.is_expanded() and not node.board.is_game_over(claim_draw=True):
+            node = self.select_child(node)
             path.append(node)
 
-            current_history = update_history(
-                current_history,
-                node.board,
-            )
-
-            # Этот лист уже обрабатывается в текущем батче.
             if node in pending_nodes:
                 return None
 
         if node in pending_nodes:
             return None
 
+        # История нужна для кодирования конечного листа.
+        current_history = history
+
+        for path_node in path[1:]:
+            current_history = update_history(current_history, path_node.board)
+
         return node, current_history, path
-
-    def ucb_score(self, parent, child):
-        if child.visit_count == 0:
-            q = 0.0
-        else:
-            q = -child.value()
-
-        u = self.c_puct * child.prior * np.sqrt(parent.visit_count) / (1 + child.visit_count)
-
-        return u + q
 
     # --------------------------------------------------
     # VIRTUAL LOSS
@@ -282,8 +283,6 @@ class MCTS:
 
     @staticmethod
     def apply_virtual_loss(path):
-        # Временная оценка листа: проигрыш для игрока,
-        # которому принадлежит ход в этом листе.
         value = -1.0
 
         for node in reversed(path):
@@ -315,77 +314,42 @@ class MCTS:
         if not legal_moves:
             return terminal_value(board)
 
-        # ----------------------------------------------
-        # NO NEURAL NETWORK
-        # ----------------------------------------------
-
+        # Без нейросети: равномерное распределение по ходам.
         if self.model is None:
             prior = 1.0 / len(legal_moves)
 
-            for move in legal_moves:
-                index = encode_action(move, board)
-
-                child_board = board.copy(stack=False)
-                child_board.push(move)
-
-                node.children[index] = Node(
-                    board=child_board,
-                    parent=node,
-                    prior=prior,
-                    action=index,
-                )
+            node.legal_actions = {encode_action(move, board): (move, prior) for move in legal_moves}
 
             return 0.0
 
-        # ----------------------------------------------
-        # INFERENCE
-        # ----------------------------------------------
-
+        # Если предсказание не передано, запускаем сеть отдельно.
         if prediction is None:
-            state = encode_state(history).unsqueeze(0).to(
-                self.device
-            )
+            state = encode_state(history).unsqueeze(0).to(self.device)
 
             with torch.inference_mode():
                 policy_logits, value = self.model(state)
 
             policy_logits = policy_logits[0]
             value = value[0]
-
         else:
             policy_logits, value = prediction
 
-        # ----------------------------------------------
-        # POLICY ON CPU
-        # ----------------------------------------------
+        # Кодируем только легальные действия.
+        legal_indices = [encode_action(move, board) for move in legal_moves]
 
-        mask = legal_action_mask(board)
-        legal_indices = torch.where(mask)[0]
+        # Преобразуем logits в вероятности по легальным ходам.
+        policy_np = policy_logits.detach().cpu().numpy()
+        legal_logits = policy_np[legal_indices]
 
-        policy_cpu = policy_logits.detach().cpu()
-        legal_logits = policy_cpu[legal_indices]
+        legal_priors = np.exp(legal_logits - legal_logits.max())
+        legal_priors /= legal_priors.sum()
 
-        legal_priors = torch.softmax(legal_logits, dim=0)
-
-        legal_indices = legal_indices.tolist()
         legal_priors = legal_priors.tolist()
 
-        # ----------------------------------------------
-        # CREATE CHILDREN
-        # ----------------------------------------------
-
-        for index, prior in zip(legal_indices, legal_priors):
-            move = decode_action(index, board)
-
-            child_board = board.copy(stack=False)
-            child_board.push(move)
-
-            node.children[index] = Node(
-                board=child_board,
-                parent=node,
-                prior=prior,
-                action=index,
-            )
+        # Сохраняем метаданные действий, не создавая всё дерево.
+        node.legal_actions = {legal_indices[i]: (legal_moves[i], float(legal_priors[i]))
+                              for i in range(len(legal_indices))
+        }
 
         return value.item()
 
@@ -394,15 +358,21 @@ class MCTS:
     # --------------------------------------------------
 
     def add_dirichlet_noise(self, root):
-        children = list(root.children.values())
-
-        if not children:
+        if not root.legal_actions:
             return
 
-        noise = np.random.dirichlet([self.dirichlet_alpha] * len(children))
+        actions = list(root.legal_actions.items())
+
+        noise = np.random.dirichlet([self.dirichlet_alpha] * len(actions))
 
         epsilon = self.dirichlet_eps
 
-        for child, noise_value in zip(children, noise):
-            child.prior = (1 - epsilon) * child.prior + epsilon * noise_value
+        for (action_index, (move, prior)), noise_value in zip(actions, noise):
+            new_prior = (1 - epsilon) * prior + epsilon * float(noise_value)
 
+            root.legal_actions[action_index] = (move, new_prior)
+
+            child = root.children.get(action_index)
+
+            if child is not None:
+                child.prior = new_prior

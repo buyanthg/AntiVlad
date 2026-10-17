@@ -3,7 +3,6 @@
 **pycache**/
 *.py[cod]
 *.pyd
-
 # Virtual environments
 
 .venv/

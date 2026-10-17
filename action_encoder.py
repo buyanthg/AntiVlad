@@ -3,43 +3,25 @@ import torch
 
 from constants import *
 
+KNIGHT_DISPLACEMENTS = frozenset({
+    (1, 2),
+    (2, 1),
+})
+
+PROMOTION_PIECES = frozenset({
+    chess.KNIGHT,
+    chess.BISHOP,
+    chess.ROOK,
+})
+
 def encode_move(move: chess.Move, board) -> tuple[int, int]:
-    """
-    Encodes a chess move into an AlphaZero-style action representation.
-
-    The action is represented as:
-        (from_square, move_type)
-
-    from_square:
-        Starting square in the coordinate system of the current player.
-        The square is an integer in the range [0, 63].
-
-    move_type:
-        One of 73 possible move types:
-            0-55  - queen-like moves (direction + distance)
-            56-63 - knight moves
-            64-72 - underpromotions to knight, bishop, or rook
-
-        Promotion to a queen is represented as a regular queen-like move.
-
-    The board is represented from the current player's perspective.
-    For Black, ranks are flipped so that increasing rank always
-    corresponds to moving forward for the current player.
-
-    Args:
-        move: A chess.Move object representing the move to encode.
-        board: The current chess board.
-
-    Returns:
-        A tuple (from_square, move_type).
-    """
     square_from = move.from_square
     square_to = move.to_square
 
-    file_from = chess.square_file(square_from)
-    rank_from = chess.square_rank(square_from)
-    file_to = chess.square_file(square_to)
-    rank_to = chess.square_rank(square_to)
+    file_from = square_from & 7
+    rank_from = square_from >> 3
+    file_to = square_to & 7
+    rank_to = square_to >> 3
 
     if board.turn == chess.BLACK:
         rank_from = 7 - rank_from
@@ -47,9 +29,9 @@ def encode_move(move: chess.Move, board) -> tuple[int, int]:
 
     dx = file_to - file_from
     dy = rank_to - rank_from
-    if (abs(dx), abs(dy)) in {(1, 2), (2, 1)}:
+    if (abs(dx), abs(dy)) in KNIGHT_DISPLACEMENTS:
         move_type = KNIGHT_MOVES[(dx, dy)]
-    elif move.promotion in {    chess.KNIGHT, chess.BISHOP, chess.ROOK}:
+    elif move.promotion in PROMOTION_PIECES:
         move_type = PROMOTION_MOVES[(dx, dy, move.promotion)]
     else:
         sign_dx = 0 if dx == 0 else dx // abs(dx)
@@ -62,16 +44,6 @@ def encode_move(move: chess.Move, board) -> tuple[int, int]:
 
 
 def decode_move(encoded_move, board):
-    """
-    Decodes an action representation into a chess.Move.
-
-    Args:
-        encoded_move: A tuple (from_square, move_type).
-        player: The color of the player making the move.
-
-    Returns:
-        A chess.Move object.
-    """
     square, move_type = encoded_move
     file_from = chess.square_file(square)
     rank_from = chess.square_rank(square)
