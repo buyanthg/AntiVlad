@@ -17,10 +17,11 @@ SIMULATIONS = 800
 EPOCHS = 10
 BUFFER_CAPACITY = 100_000
 
-DATA_DIR = Path("data")
-CHECKPOINT_PATH = Path(CHECKPOINT_DIR) / "latest.pt"
-BUFFER_PATH = DATA_DIR / "replay_buffer.pt"
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
+DATA_DIR = PROJECT_ROOT / "data"
+CHECKPOINT_PATH = PROJECT_ROOT / CHECKPOINT_DIR / "latest.pt"
+BUFFER_PATH = DATA_DIR / "replay_buffer.pt"
 SAVE_EVERY = 10
 
 def main():
