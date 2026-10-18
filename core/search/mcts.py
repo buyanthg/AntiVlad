@@ -49,6 +49,8 @@ class Node:
         # dict: индекс действия -> (chess.Move, prior).
         self.legal_actions = None
 
+        self.terminal = None
+
     def value(self):
         if self.visit_count == 0:
             return 0.0
@@ -87,9 +89,9 @@ class MCTS:
     # --------------------------------------------------
 
     def search(self, history):
-        root = Node(history[-1].copy(stack=False))
+        root = Node(history[-1].copy(stack=True))
 
-        if root.board.is_game_over(claim_draw=True):
+        if self.is_terminal(root):
             return root
 
         self.expand(root, history)
@@ -100,7 +102,7 @@ class MCTS:
         for _ in range(self.simulations):
             node, node_history = self.select(root, history)
 
-            if node.board.is_game_over(claim_draw=True):
+            if self.is_terminal(node):
                 value = terminal_value(node.board)
             else:
                 value = self.expand(node, node_history)
@@ -120,9 +122,9 @@ class MCTS:
         if self.model is None:
             return self.search(history)
 
-        root = Node(history[-1].copy(stack=False))
+        root = Node(history[-1].copy(stack=True))
 
-        if root.board.is_game_over(claim_draw=True):
+        if self.is_terminal(root):
             return root
 
         self.expand(root, history)
@@ -149,7 +151,7 @@ class MCTS:
                 node, node_history, path = result
                 slots += 1
 
-                if node.board.is_game_over(claim_draw=True):
+                if self.is_terminal(node):
                     backup(node, terminal_value(node.board))
                     completed += 1
                     continue
@@ -175,17 +177,10 @@ class MCTS:
             with torch.inference_mode():
                 batch_policy, batch_values = self.model(states)
 
-            batch_policy = batch_policy.cpu()
-            batch_values = batch_values.cpu()
-
-            # Раскрываем листья и обновляем значения дерева.
             for i, (node, node_history, path) in enumerate(pending):
                 self.remove_virtual_loss(path)
-
                 prediction = (batch_policy[i], batch_values[i])
-
-                value = self.expand(node, node_history, prediction=prediction,)
-
+                value = self.expand(node, node_history, prediction=prediction)
                 backup(node, value)
                 completed += 1
 
@@ -207,7 +202,7 @@ class MCTS:
 
         move, prior = node.legal_actions[action_index]
 
-        child_board = node.board.copy(stack=False)
+        child_board = node.board.copy(stack=True)
         child_board.push(move)
 
         child = Node(board=child_board, parent=node, prior=prior, action=action_index)
@@ -250,7 +245,7 @@ class MCTS:
     def select(self, node, history):
         current_history = history
 
-        while node.is_expanded() and not node.board.is_game_over(claim_draw=True):
+        while node.is_expanded() and not self.is_terminal(node):
             node = self.select_child(node)
             current_history = update_history(current_history, node.board)
 
@@ -259,7 +254,7 @@ class MCTS:
     def select_batched(self, node, history, pending_nodes):
         path = [node]
 
-        while node.is_expanded() and not node.board.is_game_over(claim_draw=True):
+        while node.is_expanded() and not self.is_terminal(node):
             node = self.select_child(node)
             path.append(node)
 
@@ -304,10 +299,10 @@ class MCTS:
     # --------------------------------------------------
 
     def expand(self, node, history, prediction=None):
-        board = node.board
+        if self.is_terminal(node):
+            return terminal_value(node.board)
 
-        if board.is_game_over(claim_draw=True):
-            return terminal_value(board)
+        board = node.board
 
         legal_moves = list(board.legal_moves)
 
@@ -338,13 +333,14 @@ class MCTS:
         legal_indices = [encode_action(move, board) for move in legal_moves]
 
         # Преобразуем logits в вероятности по легальным ходам.
-        policy_np = policy_logits.detach().cpu().numpy()
-        legal_logits = policy_np[legal_indices]
+        legal_indices_tensor = torch.tensor(
+            legal_indices,
+            dtype=torch.long,
+            device=policy_logits.device,
+        )
 
-        legal_priors = np.exp(legal_logits - legal_logits.max())
-        legal_priors /= legal_priors.sum()
-
-        legal_priors = legal_priors.tolist()
+        legal_logits = policy_logits[legal_indices_tensor]
+        legal_priors = torch.softmax(legal_logits, dim=0).tolist()
 
         # Сохраняем метаданные действий, не создавая всё дерево.
         node.legal_actions = {legal_indices[i]: (legal_moves[i], float(legal_priors[i]))
@@ -376,3 +372,9 @@ class MCTS:
 
             if child is not None:
                 child.prior = new_prior
+
+    @staticmethod
+    def is_terminal(node):
+        if node.terminal is None:
+            node.terminal = node.board.is_game_over(claim_draw=True)
+        return node.terminal

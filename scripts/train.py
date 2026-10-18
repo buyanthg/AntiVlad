@@ -13,14 +13,15 @@ from core.training.trainer import Trainer
 # Настройки эксперимента
 NUM_ITERATIONS = 5
 NUM_GAMES = 100
-SIMULATIONS = 20
+SIMULATIONS = 800
 EPOCHS = 10
-BUFFER_CAPACITY = 200_000
+BUFFER_CAPACITY = 100_000
 
 DATA_DIR = Path("data")
 CHECKPOINT_PATH = Path(CHECKPOINT_DIR) / "latest.pt"
 BUFFER_PATH = DATA_DIR / "replay_buffer.pt"
 
+SAVE_EVERY = 10
 
 def main():
     CHECKPOINT_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -53,10 +54,7 @@ def main():
         simulations=SIMULATIONS,
     )
 
-    for iteration in range(
-        start_iteration + 1,
-        start_iteration + NUM_ITERATIONS + 1,
-    ):
+    for iteration in range(start_iteration + 1, start_iteration + NUM_ITERATIONS + 1):
         print(f"\n{'=' * 20} Iteration {iteration} {'=' * 20}")
 
         iteration_start = perf_counter()
@@ -64,19 +62,18 @@ def main():
         completed_games = 0
 
         # 1. Генерируем партии
-        for game_number in tqdm(
-            range(1, NUM_GAMES + 1),
-            desc="Self-play",
-        ):
+        for _ in tqdm(range(1, NUM_GAMES + 1), desc="Self-play"):
             game_data = self_play.play_game()
 
             # None означает незавершённую партию
             if game_data is None:
+                print("Партия слишком длинная")
                 continue
 
             buffer.add_game(game_data)
             new_positions += len(game_data)
             completed_games += 1
+            print(f"Длина партии: {len(game_data)}")
 
         print(
             f"Completed games: {completed_games}/{NUM_GAMES} | "
@@ -85,32 +82,22 @@ def main():
         )
 
         if len(buffer) == 0:
-            raise RuntimeError(
-                "Replay buffer is empty. No training data available."
-            )
+            raise RuntimeError("Replay buffer is empty. No training data available.")
 
         # 2. Обучаем модель на накопленных данных
-        training_history = trainer.train(
-            buffer.sample_all(),
-            epochs=EPOCHS,
-        )
+        training_history = trainer.train(buffer.sample_all(), epochs=EPOCHS)
 
-        history.append({
-            "iteration": iteration,
-            "games": completed_games,
-            "new_positions": new_positions,
-            "buffer_size": len(buffer),
-            "epochs": training_history,
+        history.append({"iteration": iteration, "games": completed_games, "new_positions": new_positions,
+                        "buffer_size": len(buffer),"epochs": training_history,
         })
 
         # 3. Сохраняем состояние для возобновления обучения
         buffer.save(BUFFER_PATH)
-        trainer.save_checkpoint(
-            CHECKPOINT_PATH,
-            iteration=iteration,
-            history=history,
-        )
+        trainer.save_checkpoint(CHECKPOINT_PATH, iteration=iteration, history=history)
 
+        if iteration % SAVE_EVERY == 0:
+            snapshot_path = CHECKPOINT_PATH.parent / f"iteration_{iteration}.pt"
+            trainer.save_checkpoint(snapshot_path, iteration=iteration, history=history)
         elapsed = perf_counter() - iteration_start
 
         print(
